@@ -349,37 +349,39 @@ tab1, tab2 = st.tabs(["🏭  Por Máquina", "🕐  Cronológico"])
 # ────────────────────────────────────────────────────────
 with tab1:
     st.markdown(f'<div class="fecha-hoy">📅 {fecha_sel.strftime("%A %d de %B de %Y").capitalize()}</div>', unsafe_allow_html=True)
-    
+
+    STATUS_ICON = {"RUN": "🟢", "PEND": "🔵", "SUSP": "🟠"}
+    STATUS_COLOR = {"RUN": "normal", "PEND": "normal", "SUSP": "normal"}
+
     for maquina, grupo in df_dia.groupby("Máquina"):
-        grupo = grupo.sort_values("Inicio")
+        grupo = grupo.sort_values("Inicio").reset_index(drop=True)
         n = len(grupo)
-        
-        filas_html = ""
-        for _, row in grupo.iterrows():
-            # Resaltar si el inicio es hoy exactamente (cambio de molde)
-            es_inicio_hoy = row["Inicio"].date() == fecha_sel
-            highlight = "border-left: 3px solid #22d3ee;" if es_inicio_hoy else ""
-            
-            filas_html += f"""
-            <div class="ot-row" style="{highlight}">
-                <div class="ot-job">{row['Job Number']}</div>
-                <div class="ot-mol">{row['Molde']}</div>
-                <div class="ot-hora">▶ {row['Inicio_str']}<br><span style="color:#475569;font-size:11px;">⏹ {row['Fin_str']}</span></div>
-                <div class="ot-desc">{row['Descripción'][:55]}{'...' if len(row['Descripción']) > 55 else ''}</div>
-                <div>{badge_status(row['Status'])}</div>
-                <div class="ot-hours">⏱ {row['Horas']}</div>
-            </div>
-            """
-        
-        st.markdown(f"""
-        <div class="machine-card">
-          <div class="machine-header">
-            <span class="machine-name">{maquina}</span>
-            <span class="machine-count">{n} OT</span>
-          </div>
-          {filas_html}
-        </div>
-        """, unsafe_allow_html=True)
+
+        with st.expander(f"🏭 **{maquina}** — {n} OT", expanded=True):
+            # Encabezados de columna
+            h1, h2, h3, h4, h5, h6 = st.columns([1.2, 1.4, 1.8, 2.8, 1, 1])
+            h1.markdown("**Job #**")
+            h2.markdown("**Molde**")
+            h3.markdown("**Inicio → Fin**")
+            h4.markdown("**Descripción**")
+            h5.markdown("**Estado**")
+            h6.markdown("**Horas**")
+            st.divider()
+
+            for _, row in grupo.iterrows():
+                es_inicio_hoy = row["Inicio"].date() == fecha_sel
+                c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.4, 1.8, 2.8, 1, 1])
+
+                # Resaltar cambio de molde con ícono
+                prefix = "🔄 " if es_inicio_hoy else ""
+
+                c1.markdown(f"`{row['Job Number']}`")
+                c2.markdown(f"**{row['Molde']}**")
+                c3.markdown(f"{prefix}▶ `{row['Inicio_str']}`  \n⏹ `{row['Fin_str']}`")
+                c4.markdown(row['Descripción'][:60])
+                icon = STATUS_ICON.get(row['Status'], '⚪')
+                c5.markdown(f"{icon} **{row['Status']}**")
+                c6.markdown(f"`{row['Horas']}`")
 
 
 # ────────────────────────────────────────────────────────
@@ -387,51 +389,38 @@ with tab1:
 # ────────────────────────────────────────────────────────
 with tab2:
     st.markdown(f'<div class="fecha-hoy">📅 Orden cronológico — {fecha_sel.strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
-    
-    # Encabezado de columnas
-    st.markdown("""
-    <div style="display:grid;grid-template-columns:110px 100px 120px 130px 1fr 80px;
-                gap:12px;padding:8px 18px;color:#475569;font-size:11px;
-                text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #1e293b;margin-bottom:8px;">
-        <div>Inicio</div>
-        <div>Máquina</div>
-        <div>Molde</div>
-        <div>Job #</div>
-        <div>Descripción</div>
-        <div>Estado</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
+
     df_crono = df_dia.sort_values("Inicio").reset_index(drop=True)
-    
+
+    # Encabezados
+    h1, h2, h3, h4, h5, h6 = st.columns([1.5, 1.3, 1.5, 1.2, 3, 1])
+    h1.markdown("**Inicio**")
+    h2.markdown("**Máquina**")
+    h3.markdown("**Molde**")
+    h4.markdown("**Job #**")
+    h5.markdown("**Descripción**")
+    h6.markdown("**Estado**")
+    st.divider()
+
     fecha_anterior = None
-    html_bloque = ""
-    
+    STATUS_ICON = {"RUN": "🟢", "PEND": "🔵", "SUSP": "🟠"}
+
     for _, row in df_crono.iterrows():
         if row["Fecha"] != fecha_anterior:
-            if html_bloque:
-                st.markdown(html_bloque, unsafe_allow_html=True)
-                html_bloque = ""
             st.markdown(f'<div class="date-badge">📆 {row["Inicio"].strftime("%A %d de %B").capitalize()}</div>', unsafe_allow_html=True)
             fecha_anterior = row["Fecha"]
-        
-        # Resaltar cambios de molde (cuando el inicio es hoy)
+
         es_inicio_hoy = row["Inicio"].date() == fecha_sel
-        border = "border-color: #22d3ee55;" if es_inicio_hoy else ""
-        
-        html_bloque += f"""
-        <div class="crono-row" style="{border}">
-            <div class="ot-hora">{row['Inicio_str']}</div>
-            <div class="machine-name" style="font-size:14px;">{row['Máquina']}</div>
-            <div class="ot-mol">{row['Molde']}</div>
-            <div class="ot-job">{row['Job Number']}</div>
-            <div class="ot-desc">{row['Descripción'][:60]}{'...' if len(row['Descripción']) > 60 else ''}</div>
-            <div>{badge_status(row['Status'])}</div>
-        </div>
-        """
-    
-    if html_bloque:
-        st.markdown(html_bloque, unsafe_allow_html=True)
+        prefix = "🔄 " if es_inicio_hoy else ""
+
+        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 1.3, 1.5, 1.2, 3, 1])
+        c1.markdown(f"`{row['Inicio_str']}`")
+        c2.markdown(f"**{row['Máquina']}**")
+        c3.markdown(f"{prefix}**{row['Molde']}**")
+        c4.markdown(f"`{row['Job Number']}`")
+        c5.markdown(row['Descripción'][:65])
+        icon = STATUS_ICON.get(row['Status'], '⚪')
+        c6.markdown(f"{icon} **{row['Status']}**")
 
 # ── DESCARGA EXCEL ────────────────────────────────────────
 st.markdown("---")
