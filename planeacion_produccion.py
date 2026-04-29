@@ -298,20 +298,25 @@ with col_fecha:
     )
 
 with col_maquina:
-    maquinas_disponibles = ["Todas"] + sorted(df_total["Máquina"].dropna().unique().tolist())
-    maquina_sel = st.selectbox("🏭 Filtrar por máquina", maquinas_disponibles)
+    maquinas_disponibles = sorted(df_total["Máquina"].dropna().unique().tolist())
+    maquina_sel = st.multiselect(
+        "Maquinas a visualizar",
+        options=maquinas_disponibles,
+        default=maquinas_disponibles,
+        placeholder="Selecciona una o mas maquinas..."
+    )
 
 with col_status:
     status_sel = st.multiselect(
-        "🔘 Estado",
+        "Estado",
         options=["RUN", "PEND", "SUSP"],
         default=["RUN", "PEND", "SUSP"]
     )
 
 # Aplicar filtros
 df_dia = filtrar_por_fecha(df_total, fecha_sel)
-if maquina_sel != "Todas":
-    df_dia = df_dia[df_dia["Máquina"] == maquina_sel]
+if maquina_sel:
+    df_dia = df_dia[df_dia["Máquina"].isin(maquina_sel)]
 if status_sel:
     df_dia = df_dia[df_dia["Status"].isin(status_sel)]
 
