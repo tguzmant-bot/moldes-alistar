@@ -119,6 +119,55 @@ def filtrar_rango(df: pd.DataFrame, fechas: list) -> pd.DataFrame:
     return df[mask].copy()
 
 
+def calcular_secuencia_real(df_maq: pd.DataFrame) -> pd.DataFrame:
+    """
+    Por máquina, calcula la hora REAL de montaje de cada orden
+    sumando las horas restantes acumuladas desde la orden en curso (RUN).
+    Detecta cuándo cambia el molde (= necesita alistamiento).
+    """
+    df_m = df_maq.sort_values("Inicio").reset_index(drop=True)
+
+    # Punto de referencia: fin estimado de la orden RUN
+    run_rows = df_m[df_m["Status"] == "RUN"]
+    if not run_rows.empty:
+        run = run_rows.iloc[0]
+        ahora_ref = run["Inicio"] + timedelta(hours=run["Horas_dec"])
+    else:
+        ahora_ref = df_m.iloc[0]["Inicio"]
+
+    resultados = []
+    tiempo_acumulado = ahora_ref - timedelta(hours=df_m.iloc[0]["Horas_dec"])
+
+    for i, row in df_m.iterrows():
+        molde_anterior = df_m.iloc[i - 1]["Molde"] if i > 0 else None
+        cambia_molde   = (molde_anterior != row["Molde"]) if molde_anterior else True
+
+        hora_montaje_real    = tiempo_acumulado
+        horas_hasta_montaje  = (hora_montaje_real - ahora_ref).total_seconds() / 3600
+
+        resultados.append({
+            "Seq":                  i + 1,
+            "Job Number":           row["Job Number"],
+            "Molde":                row["Molde"],
+            "Máquina":              row["Máquina"],
+            "Status":               row["Status"],
+            "Horas_str":            row["Horas"],
+            "Horas_dec":            row["Horas_dec"],
+            "Fecha_Epicor_str":     row["Inicio_str"],
+            "Fecha_Epicor":         row["Inicio"].date(),
+            "Hora_real_montaje":    hora_montaje_real,
+            "Hora_real_str":        hora_montaje_real.strftime("%d/%m %H:%M"),
+            "Fecha_real":           hora_montaje_real.date(),
+            "Horas_hasta_montaje":  round(max(horas_hasta_montaje, 0), 1),
+            "Cambia_molde":         cambia_molde,
+            "Descripción":          row["Descripción"],
+        })
+        tiempo_acumulado += timedelta(hours=row["Horas_dec"])
+
+    return pd.DataFrame(resultados)
+
+
+
 # ══════════════════════════════════════════════════════════
 #  GENERADOR DE PDF CHECKLIST
 # ══════════════════════════════════════════════════════════
@@ -397,52 +446,77 @@ fecha_max = df_total["Fin"].dt.date.max()
 
 # ── FILTROS ───────────────────────────────────────────────
 st.markdown("---")
-col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 2])
 
-with col_f1:
-    fecha_inicio_sel = st.date_input(
-        "📅 Desde",
-        value=date.today(),
-        min_value=fecha_min,
-        max_value=fecha_max,
-        format="DD/MM/YYYY"
-    )
+modo_fecha = st.radio(
+    "Modo de seleccion de fechas",
+    options=["Rango continuo (Desde Hasta)", "Dias especificos (seleccion libre)"],
+    horizontal=True,
+)
+
+col_f1, col_f2, col_f3 = st.columns([4, 3, 3])
+
+todas_fechas = sorted(set(
+    list(df_total["Inicio"].dt.date.unique()) +
+    list(df_total["Fin"].dt.date.unique())
+))
+todas_fechas_str = [f.strftime("%a %d/%m/%Y") for f in todas_fechas]
+str_a_fecha = {s: f for f, s in zip(todas_fechas, todas_fechas_str)}
+
+if modo_fecha == "Rango continuo (Desde Hasta)":
+    with col_f1:
+        cA, cB = st.columns(2)
+        with cA:
+            fecha_inicio_sel = st.date_input(
+                "Desde",
+                value=fecha_min,
+                min_value=fecha_min,
+                max_value=fecha_max,
+                format="DD/MM/YYYY"
+            )
+        with cB:
+            fecha_fin_sel = st.date_input(
+                "Hasta",
+                value=min(fecha_min + timedelta(days=2), fecha_max),
+                min_value=fecha_min,
+                max_value=fecha_max,
+                format="DD/MM/YYYY"
+            )
+    if fecha_inicio_sel > fecha_fin_sel:
+        st.warning("La fecha de inicio no puede ser mayor a la fecha fin.")
+        st.stop()
+    fechas_rango = [
+        fecha_inicio_sel + timedelta(days=i)
+        for i in range((fecha_fin_sel - fecha_inicio_sel).days + 1)
+    ]
+else:
+    with col_f1:
+        default_strs = todas_fechas_str[:min(3, len(todas_fechas_str))]
+        dias_sel_str = st.multiselect(
+            "Selecciona los dias que quieres ver",
+            options=todas_fechas_str,
+            default=default_strs,
+            placeholder="Elige uno o mas dias..."
+        )
+    if not dias_sel_str:
+        st.warning("Selecciona al menos un dia.")
+        st.stop()
+    fechas_rango = sorted([str_a_fecha[s] for s in dias_sel_str])
 
 with col_f2:
-    fecha_fin_sel = st.date_input(
-        "📅 Hasta",
-        value=date.today(),
-        min_value=fecha_min,
-        max_value=fecha_max,
-        format="DD/MM/YYYY"
+    maquinas_disponibles = sorted(df_total["Máquina"].dropna().unique().tolist())
+    maquina_sel = st.multiselect(
+        "Maquinas",
+        options=maquinas_disponibles,
+        default=maquinas_disponibles,
+        placeholder="Selecciona maquinas..."
     )
 
 with col_f3:
-    maquinas_disponibles = sorted(df_total["Máquina"].dropna().unique().tolist())
-    maquina_sel = st.multiselect(
-        "🏭 Máquinas",
-        options=maquinas_disponibles,
-        default=maquinas_disponibles,
-        placeholder="Selecciona máquinas..."
-    )
-
-with col_f4:
     status_sel = st.multiselect(
-        "🔘 Estado",
+        "Estado",
         options=["RUN", "PEND", "SUSP"],
         default=["RUN", "PEND", "SUSP"]
     )
-
-# Construir lista de fechas del rango
-if fecha_inicio_sel > fecha_fin_sel:
-    st.warning("⚠️ La fecha de inicio no puede ser mayor a la fecha fin.")
-    st.stop()
-
-fechas_rango = [
-    fecha_inicio_sel + timedelta(days=i)
-    for i in range((fecha_fin_sel - fecha_inicio_sel).days + 1)
-]
-
 # Aplicar filtros
 df_vista = filtrar_rango(df_total, fechas_rango)
 if maquina_sel:
@@ -509,82 +583,208 @@ with col_excel:
 st.markdown("---")
 
 # ── TABS ──────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["🏭  Por Máquina  (secuencial)", "🕐  Cronológico  (todos los días)"])
+tab1, tab2, tab3 = st.tabs([
+    "🏭  Por Máquina — Secuencia Real",
+    "🕐  Cronológico por Hora Real",
+    "📋  Resumen de Cambios de Molde"
+])
 
-STATUS_ICON = {"RUN": "🟢", "PEND": "🔵", "SUSP": "🟠"}
+STATUS_ICON  = {"RUN": "🟢", "PEND": "🔵", "SUSP": "🟠"}
+STATUS_LABEL = {"RUN": "🟢 RUN", "PEND": "🔵 PEND", "SUSP": "🟠 SUSP"}
+
+# Pre-calcular secuencia real para todas las máquinas del df_vista completo
+@st.cache_data
+def calcular_todas_maquinas(df_hash):
+    return df_hash
+
+seq_por_maquina = {}
+for maq in df_vista["Máquina"].unique():
+    df_maq = df_vista[df_vista["Máquina"] == maq].copy()
+    seq_por_maquina[maq] = calcular_secuencia_real(df_maq)
+
+df_secuencia_total = pd.concat(seq_por_maquina.values(), ignore_index=True)
 
 # ────────────────────────────────────────────────────────
-# TAB 1: POR MÁQUINA — secuencial por día
+# TAB 1: POR MÁQUINA — SECUENCIA REAL
 # ────────────────────────────────────────────────────────
 with tab1:
-    for fecha in fechas_rango:
-        df_fecha = df_vista[
-            (df_vista["Inicio"].dt.date <= fecha) &
-            (df_vista["Fin"].dt.date   >= fecha)
-        ].copy()
+    st.markdown("""
+    > **Cómo leer esta vista:** Las horas mostradas son **calculadas acumulando las horas restantes**
+    > de cada orden, comenzando desde la orden actualmente en producción (🟢 RUN).
+    > La columna **"Hrs hasta montaje"** indica cuántas horas faltan desde ahora para montar ese molde.
+    > 🔄 indica cambio de molde = requiere alistamiento.
+    """)
+    st.markdown("---")
 
-        if df_fecha.empty:
-            continue
+    for maq in sorted(seq_por_maquina.keys()):
+        df_seq = seq_por_maquina[maq]
+        n_cambios = df_seq["Cambia_molde"].sum()
 
-        st.markdown(
-            f'<div class="date-badge">📅 {fecha.strftime("%A %d de %B de %Y").capitalize()} — {len(df_fecha)} OT</div>',
-            unsafe_allow_html=True
-        )
+        with st.expander(f"🏭 **{maq}** — {len(df_seq)} OT · {n_cambios} cambios de molde", expanded=True):
+            # Encabezados
+            c = st.columns([0.4, 0.9, 1.3, 1.5, 1.5, 0.9, 2.5, 1.0, 1.1])
+            for col, lbl in zip(c, ["**#**","**Job #**","**Molde**",
+                                     "**Hora Epicor**","**Hora Real**",
+                                     "**Hrs falta**","**Descripción**",
+                                     "**Horas OT**","**Estado**"]):
+                col.markdown(lbl)
+            st.divider()
 
-        for maquina, grupo in df_fecha.groupby("Máquina"):
-            grupo = grupo.sort_values("Inicio").reset_index(drop=True)
-            n = len(grupo)
+            for _, row in df_seq.iterrows():
+                c = st.columns([0.4, 0.9, 1.3, 1.5, 1.5, 0.9, 2.5, 1.0, 1.1])
 
-            with st.expander(f"🏭 **{maquina}** — {n} OT", expanded=True):
-                h1,h2,h3,h4,h5,h6,h7 = st.columns([0.5, 1.2, 1.4, 1.8, 2.8, 1, 1])
-                h1.markdown("**#**")
-                h2.markdown("**Job #**")
-                h3.markdown("**Molde**")
-                h4.markdown("**Inicio → Fin**")
-                h5.markdown("**Descripción**")
-                h6.markdown("**Estado**")
-                h7.markdown("**Horas**")
-                st.divider()
+                # Número secuencial
+                c[0].markdown(f"`{int(row['Seq'])}`")
 
-                for idx, (_, row) in enumerate(grupo.iterrows(), 1):
-                    es_inicio = row["Inicio"].date() == fecha
-                    c1,c2,c3,c4,c5,c6,c7 = st.columns([0.5,1.2,1.4,1.8,2.8,1,1])
-                    c1.markdown(f"`{idx}`")
-                    c2.markdown(f"`{row['Job Number']}`")
-                    c3.markdown(f"**{row['Molde']}**")
-                    prefx = "🔄 " if es_inicio else ""
-                    c4.markdown(f"{prefx}▶ `{row['Inicio_str']}`  \n⏹ `{row['Fin_str']}`")
-                    c5.markdown(row['Descripción'][:65])
-                    c6.markdown(f"{STATUS_ICON.get(row['Status'],'⚪')} **{row['Status']}**")
-                    c7.markdown(f"`{row['Horas']}`")
+                # Job number
+                c[1].markdown(f"`{row['Job Number']}`")
+
+                # Molde — con ícono si cambia
+                if row["Cambia_molde"]:
+                    c[2].markdown(f"🔄 **{row['Molde']}**")
+                else:
+                    c[2].markdown(f"{row['Molde']}")
+
+                # Fecha Epicor (referencia)
+                c[3].markdown(f"<span style='color:#64748b;font-size:12px;'>{row['Fecha_Epicor_str']}</span>",
+                               unsafe_allow_html=True)
+
+                # Hora real calculada — resaltar si difiere mucho de Epicor
+                fecha_epicor = row["Fecha_Epicor"]
+                fecha_real   = row["Fecha_real"]
+                diff_dias    = (fecha_real - fecha_epicor).days if hasattr(fecha_epicor, 'day') else 0
+                if abs(diff_dias) >= 1:
+                    c[4].markdown(f"⚠️ **{row['Hora_real_str']}**")
+                else:
+                    c[4].markdown(f"**{row['Hora_real_str']}**")
+
+                # Horas hasta montaje
+                h = row["Horas_hasta_montaje"]
+                if h == 0:
+                    c[5].markdown("🟢 **Ahora**")
+                elif h <= 8:
+                    c[5].markdown(f"🟡 **{h}h**")
+                elif h <= 24:
+                    c[5].markdown(f"🔵 {h}h")
+                else:
+                    c[5].markdown(f"`{h}h`")
+
+                # Descripción
+                c[6].markdown(row["Descripción"][:55])
+
+                # Horas de la OT
+                c[7].markdown(f"`{row['Horas_str']}`")
+
+                # Estado
+                c[8].markdown(STATUS_LABEL.get(row["Status"], row["Status"]))
 
 # ────────────────────────────────────────────────────────
-# TAB 2: CRONOLÓGICO MULTI-DÍA
+# TAB 2: CRONOLÓGICO POR HORA REAL
 # ────────────────────────────────────────────────────────
 with tab2:
-    df_crono = df_vista.sort_values(["Inicio", "Máquina"]).reset_index(drop=True)
+    st.markdown("""
+    > Todas las órdenes de todas las máquinas ordenadas por **hora real de montaje calculada**.
+    > ⚠️ indica que la fecha real difiere en 1+ días de lo que muestra Epicor.
+    """)
 
-    h1,h2,h3,h4,h5,h6 = st.columns([1.5,1.3,1.5,1.2,3,1])
-    for h, lbl in zip([h1,h2,h3,h4,h5,h6],
-                      ["**Inicio**","**Máquina**","**Molde**","**Job #**","**Descripción**","**Estado**"]):
-        h.markdown(lbl)
+    df_crono = df_secuencia_total.sort_values("Hora_real_montaje").reset_index(drop=True)
+
+    # Encabezados
+    c = st.columns([1.4, 1.2, 1.3, 0.9, 1.4, 0.8, 2.8, 0.9])
+    for col, lbl in zip(c, ["**Hora Real**","**Máquina**","**Molde**","**Job #**",
+                              "**Hora Epicor**","**Hrs falta**","**Descripción**","**Estado**"]):
+        col.markdown(lbl)
     st.divider()
 
     fecha_anterior = None
     for _, row in df_crono.iterrows():
-        if row["Fecha"] != fecha_anterior:
+        fecha_real = row["Fecha_real"]
+        if fecha_real != fecha_anterior:
             st.markdown(
-                f'<div class="date-badge">📆 {row["Inicio"].strftime("%A %d de %B").capitalize()}</div>',
+                f'<div class="date-badge">📆 {row["Hora_real_montaje"].strftime("%A %d de %B de %Y").capitalize()}</div>',
                 unsafe_allow_html=True
             )
-            fecha_anterior = row["Fecha"]
+            fecha_anterior = fecha_real
 
-        es_inicio = row["Inicio"].date() == row["Fecha"]
-        prefix = "🔄 " if es_inicio else ""
-        c1,c2,c3,c4,c5,c6 = st.columns([1.5,1.3,1.5,1.2,3,1])
-        c1.markdown(f"`{row['Inicio_str']}`")
-        c2.markdown(f"**{row['Máquina']}**")
-        c3.markdown(f"{prefix}**{row['Molde']}**")
-        c4.markdown(f"`{row['Job Number']}`")
-        c5.markdown(row['Descripción'][:65])
-        c6.markdown(f"{STATUS_ICON.get(row['Status'],'⚪')} **{row['Status']}**")
+        c = st.columns([1.4, 1.2, 1.3, 0.9, 1.4, 0.8, 2.8, 0.9])
+
+        c[0].markdown(f"**{row['Hora_real_str']}**")
+        c[1].markdown(f"**{row['Máquina']}**")
+
+        if row["Cambia_molde"]:
+            c[2].markdown(f"🔄 **{row['Molde']}**")
+        else:
+            c[2].markdown(row["Molde"])
+
+        c[3].markdown(f"`{row['Job Number']}`")
+
+        fecha_epicor = row["Fecha_Epicor"]
+        fecha_real_d = row["Fecha_real"]
+        diff = (fecha_real_d - fecha_epicor).days if hasattr(fecha_epicor, 'day') else 0
+        if abs(diff) >= 1:
+            c[4].markdown(f"⚠️ ~~{row['Fecha_Epicor_str']}~~")
+        else:
+            c[4].markdown(f"<span style='color:#64748b;font-size:12px;'>{row['Fecha_Epicor_str']}</span>",
+                           unsafe_allow_html=True)
+
+        h = row["Horas_hasta_montaje"]
+        c[5].markdown(f"**{h}h**" if h <= 8 else f"`{h}h`")
+        c[6].markdown(row["Descripción"][:60])
+        c[7].markdown(STATUS_LABEL.get(row["Status"], row["Status"]))
+
+# ────────────────────────────────────────────────────────
+# TAB 3: RESUMEN DE CAMBIOS DE MOLDE
+# ────────────────────────────────────────────────────────
+with tab3:
+    st.markdown("""
+    > Solo los cambios de molde que requieren alistamiento, ordenados por hora real de montaje.
+    """)
+
+    df_cambios = df_secuencia_total[df_secuencia_total["Cambia_molde"]].sort_values("Hora_real_montaje").reset_index(drop=True)
+
+    if df_cambios.empty:
+        st.info("No hay cambios de molde en el período seleccionado.")
+    else:
+        st.markdown(f"**{len(df_cambios)} cambios de molde** en el período seleccionado")
+        st.markdown("---")
+
+        c = st.columns([1.4, 1.2, 1.4, 1.4, 0.8, 2.8, 0.9])
+        for col, lbl in zip(c, ["**Hora Real Montaje**","**Máquina**","**Molde a montar**",
+                                  "**Hora Epicor**","**Hrs falta**","**Descripción**","**Estado**"]):
+            col.markdown(lbl)
+        st.divider()
+
+        fecha_anterior = None
+        for i, (_, row) in enumerate(df_cambios.iterrows()):
+            fecha_real = row["Fecha_real"]
+            if fecha_real != fecha_anterior:
+                st.markdown(
+                    f'<div class="date-badge">📆 {row["Hora_real_montaje"].strftime("%A %d de %B").capitalize()}</div>',
+                    unsafe_allow_html=True
+                )
+                fecha_anterior = fecha_real
+
+            bg = "🔄"
+            c = st.columns([1.4, 1.2, 1.4, 1.4, 0.8, 2.8, 0.9])
+
+            h = row["Horas_hasta_montaje"]
+            if h == 0:
+                c[0].markdown(f"🟢 **{row['Hora_real_str']}**")
+            elif h <= 8:
+                c[0].markdown(f"🟡 **{row['Hora_real_str']}**")
+            else:
+                c[0].markdown(f"**{row['Hora_real_str']}**")
+
+            c[1].markdown(f"**{row['Máquina']}**")
+            c[2].markdown(f"🔄 **{row['Molde']}**")
+
+            diff = (row["Fecha_real"] - row["Fecha_Epicor"]).days if hasattr(row["Fecha_Epicor"], 'day') else 0
+            if abs(diff) >= 1:
+                c[3].markdown(f"⚠️ ~~{row['Fecha_Epicor_str']}~~")
+            else:
+                c[3].markdown(f"<span style='color:#64748b;font-size:12px;'>{row['Fecha_Epicor_str']}</span>",
+                               unsafe_allow_html=True)
+
+            c[4].markdown(f"**{h}h**" if h <= 8 else f"`{h}h`")
+            c[5].markdown(row["Descripción"][:60])
+            c[6].markdown(STATUS_LABEL.get(row["Status"], row["Status"]))
