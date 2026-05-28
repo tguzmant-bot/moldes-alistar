@@ -87,11 +87,14 @@ def parse_epicor_pdf(file) -> pd.DataFrame:
                     try:
                         inicio = datetime.strptime(m.group(6).strip(), "%d/%m/%Y %H:%M")
                         fin    = datetime.strptime(m.group(7).strip(), "%d/%m/%Y %H:%M")
+                        h_str  = m.group(4)
+                        h, mi  = map(int, h_str.split(':'))
                         registros.append({
                             "Job Number":  m.group(1),
                             "Part Number": m.group(2),
                             "Tot Parts":   m.group(3),
-                            "Horas":       m.group(4),
+                            "Horas":       h_str,
+                            "Horas_dec":   round(h + mi / 60, 4),
                             "Molde":       m.group(5),
                             "Inicio":      inicio,
                             "Fin":         fin,
