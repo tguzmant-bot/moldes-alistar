@@ -484,9 +484,9 @@ if modo_fecha == "Rango continuo (Desde Hasta)":
                 max_value=fecha_max,
                 format="DD/MM/YYYY"
             )
-    if fecha_inicio_sel > fecha_fin_sel:
-        st.warning("La fecha de inicio no puede ser mayor a la fecha fin.")
-        st.stop()
+        if fecha_inicio_sel > fecha_fin_sel:
+            st.warning("La fecha de inicio no puede ser mayor a la fecha fin.")
+            st.stop()
     fechas_rango = [
         fecha_inicio_sel + timedelta(days=i)
         for i in range((fecha_fin_sel - fecha_inicio_sel).days + 1)
@@ -554,11 +554,11 @@ col_pdf, col_excel, _ = st.columns([2, 2, 4])
 with col_pdf:
     with st.spinner("Preparando PDF..."):
         pdf_bytes = generar_pdf_checklist(df_vista, fechas_rango)
-    rango_str = (
-        fecha_inicio_sel.strftime('%Y%m%d')
-        if fecha_inicio_sel == fecha_fin_sel
-        else f"{fecha_inicio_sel.strftime('%Y%m%d')}_{fecha_fin_sel.strftime('%Y%m%d')}"
-    )
+    # Construir nombre de archivo según el rango seleccionado
+    if len(fechas_rango) == 1:
+        rango_str = fechas_rango[0].strftime("%Y%m%d")
+    else:
+        rango_str = f"{min(fechas_rango).strftime('%Y%m%d')}_{max(fechas_rango).strftime('%Y%m%d')}"
     st.download_button(
         label="📄 Descargar Checklist PDF",
         data=pdf_bytes,
@@ -575,6 +575,10 @@ with col_excel:
             .rename(columns={"Inicio_str":"Inicio","Fin_str":"Fin"})\
             .sort_values(["Máquina","Inicio"])\
             .to_excel(writer, index=False, sheet_name="OT del rango")
+    if len(fechas_rango) == 1:
+        rango_str = fechas_rango[0].strftime("%Y%m%d")
+    else:
+        rango_str = f"{min(fechas_rango).strftime('%Y%m%d')}_{max(fechas_rango).strftime('%Y%m%d')}"
     st.download_button(
         label="⬇️ Descargar Excel",
         data=buf_xl.getvalue(),
